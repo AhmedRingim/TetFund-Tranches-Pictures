@@ -1,0 +1,14 @@
+tranche-payment-classifier/
+│
+├── app.py                    # Your main Streamlit app
+├── requirements.txt          # Dependencies
+├── setup.sh                  # Setup script for Streamlit
+├── packages.txt              # System dependencies (for Linux)
+├── .gitignore                # Git ignore file
+├── README.md                 # Project documentation
+│
+├── models/                   # Folder for your model
+│   └── tranches_model.h5     # Your trained model
+│
+└── images/                   # Optional: for logos/screenshots
+    └── logo.png              # Your app logo (optional)
