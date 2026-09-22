@@ -18,64 +18,42 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER
 import tempfile
 import time
-import gdown
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
 # Model paths
-MODEL_PATH = "models/tranches_model_fp16.tflite"
-FILE_ID = "1oy7PzH1RQKVY3_hyxhBfYNn2phdKzWTg"
+MODEL_PATH = Path(__file__).parent / "models" / "tranches_model.h5"
 
 @st.cache_resource
 def load_tranche_model():
-    """Load the TFLite model for tranche payment classification"""
+    """Load the local Keras model for tranche payment classification."""
     try:
-        # Create models directory if it doesn't exist
-        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-        
-        # Download model if it doesn't exist
-        if not os.path.exists(MODEL_PATH):
-            with st.spinner("Downloading model from Google Drive..."):
-                url = f"https://drive.google.com/uc?id={FILE_ID}"
-                gdown.download(url, MODEL_PATH, quiet=False)
-        
-        # Load TFLite model
-        interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
-        interpreter.allocate_tensors()
-        
-        # Get model details
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        # Store model info in session state
-        st.session_state.input_details = input_details
-        st.session_state.output_details = output_details
-        st.session_state.input_shape = input_details[0]['shape']
-        
-        return interpreter
+        if not MODEL_PATH.is_file():
+            st.error(f"Model file not found: {MODEL_PATH}")
+            return None
+
+        model = tf.keras.models.load_model(MODEL_PATH)
+        st.session_state.input_shape = model.input_shape
+        return model
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
         return None
 
-def predict_with_tflite(interpreter, img_array):
-    """Make prediction using TFLite model"""
+def predict_with_model(model, img_array):
+    """Make a prediction using the local Keras model."""
     try:
-        # Get input and output details
-        input_details = st.session_state.input_details
-        output_details = st.session_state.output_details
-        
-        # Set input tensor
-        interpreter.set_tensor(input_details[0]['index'], img_array)
-        
-        # Run inference
-        interpreter.invoke()
-        
-        # Get output
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        
-        # For binary classification, output is probability of class 1
-        prediction = output_data[0][0]
-        predicted_class = int(prediction > 0.5)
-        confidence = prediction if predicted_class == 1 else 1 - prediction
+        output_data = np.asarray(model.predict(img_array, verbose=0))
+
+        # Support either a single sigmoid output or two softmax probabilities.
+        if output_data.shape[-1] == 1:
+            prediction = float(output_data.reshape(-1)[0])
+            predicted_class = int(prediction > 0.5)
+            confidence = prediction if predicted_class == 1 else 1 - prediction
+        else:
+            probabilities = output_data[0]
+            predicted_class = int(np.argmax(probabilities))
+            confidence = float(probabilities[predicted_class])
+            prediction = float(probabilities[1])
         
         return predicted_class, confidence, prediction
     except Exception as e:
@@ -348,9 +326,9 @@ def generate_single_prediction_pdf(image, results):
         
         pdf.add_heading("Model Information")
         model_info = [
-            ['Model Type', 'TensorFlow Lite (FP16)'],
+            ['Model Type', 'TensorFlow Keras'],
             ['Input Size', f"{st.session_state.input_shape[1]}x{st.session_state.input_shape[2]} pixels"],
-            ['Format', '.tflite'],
+            ['Format', '.h5'],
             ['Framework', f'TensorFlow {tf.__version__}']
         ]
         pdf.add_table(model_info)
@@ -457,26 +435,26 @@ with st.sidebar:
     st.markdown("### 📁 Model Selection")
     
     # Load model button
-    if st.button("🔄 Load TFLite Model", use_container_width=True):
-        with st.spinner("Loading TensorFlow Lite model..."):
+    if st.button("🔄 Load Model", use_container_width=True):
+        with st.spinner("Loading model..."):
             st.session_state.model = load_tranche_model()
             if st.session_state.model is not None:
                 st.session_state.model_loaded = True
-                st.success("✅ TFLite model loaded successfully!")
+                st.success("✅ Model loaded successfully!")
                 st.info(f"Input shape: {st.session_state.input_shape}")
     
     # Model status
     if st.session_state.model_loaded:
         st.markdown(f"""
         <div class='success-box'>
-            ✅ TFLite model ready<br>
+            ✅ Model ready<br>
             Input: {st.session_state.input_shape[1]}x{st.session_state.input_shape[2]}
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div class='warning-box'>
-            ⚠️ Click 'Load TFLite Model' to start
+            ⚠️ Click 'Load Model' to start
         </div>
         """, unsafe_allow_html=True)
     
@@ -511,7 +489,7 @@ tab1, tab2, tab3 = st.tabs(["📤 Single Prediction", "📊 Batch Prediction", "
 # Tab 1: Single Prediction
 with tab1:
     if not st.session_state.model_loaded:
-        st.warning("⚠️ Please load the TFLite model from the sidebar to start making predictions.")
+        st.warning("⚠️ Please load the model from the sidebar to start making predictions.")
     else:
         st.markdown("<h2 class='sub-header'>Single Document Classification</h2>", unsafe_allow_html=True)
         
@@ -539,7 +517,7 @@ with tab1:
                     )
                     
                     if img_array is not None:
-                        predicted_class, confidence, raw_pred = predict_with_tflite(
+                        predicted_class, confidence, raw_pred = predict_with_model(
                             st.session_state.model, 
                             img_array
                         )
@@ -601,7 +579,7 @@ with tab1:
 # Tab 2: Batch Prediction
 with tab2:
     if not st.session_state.model_loaded:
-        st.warning("⚠️ Please load the TFLite model from the sidebar to make batch predictions.")
+        st.warning("⚠️ Please load the model from the sidebar to make batch predictions.")
     else:
         st.markdown("<h2 class='sub-header'>Batch Document Classification</h2>", unsafe_allow_html=True)
         
@@ -629,7 +607,7 @@ with tab2:
                 )
                 
                 if img_array is not None:
-                    predicted_class, confidence, raw_pred = predict_with_tflite(
+                    predicted_class, confidence, raw_pred = predict_with_model(
                         st.session_state.model, 
                         img_array
                     )
@@ -754,7 +732,7 @@ with tab3:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #6B7280; padding: 1rem;'>
-    <p>Developed with TensorFlow Lite & Streamlit | © 2026 RingimTech</p>
-    <p style='font-size: 0.8rem;'>Version 5.0.0 | TFLite FP16 Model</p>
+    <p>Developed with TensorFlow & Streamlit | © 2026 RingimTech</p>
+    <p style='font-size: 0.8rem;'>Version 5.0.0 | Keras Model</p>
 </div>
 """, unsafe_allow_html=True)
